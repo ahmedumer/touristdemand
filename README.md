@@ -1,5 +1,5 @@
-# touristdemand
-Tourist demand modelling based on terrorist attacks and war
+# Tourism Demand Modeling
+Tourism demand modelling based on terrorist attacks and war
 
 Scripts used to analyze the effect of war and terrorist attacks on tourist arrivals in Kurdistan region of Iraq are deposited in this repository. Also the datatsets are available to re-perform the analysis.
 
