@@ -10,12 +10,18 @@ python
 
 
 Required for stats.R:
+
 R v3.5
+
 strucchange
+
 aTSA
 
 
 Required for datamode.py:
+
 Python v3
+
 statsmodels
+
 seaborn
