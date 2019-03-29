@@ -1,11 +1,14 @@
+import os,sys
 import pandas as pd
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
+from statsmodels.formula.api import ols
+
 sns.set_style("white")
 
 
-def get_arrivals(arrivals_input_file):
+def get_arrivals(arrivals_input_file, gdi_per_month_dict, cpi_per_month_dict, exchange_rates):
     """
     Read the arrivals file
     """
@@ -33,21 +36,30 @@ def get_arrivals(arrivals_input_file):
                         season = 1
                     
                     #Wars in 2003 and also in June 2013
-                    if  (iyear>=2003 and iyear < 2003+3) or (iyear>=2014 and iyear <= 2014+3):
-                        if  iyear == 2014:
-                            if imonth>=6:
-                                war = 1
-                        elif iyear == 2017:
-                            if imonth <6:
-                                war = 1
-                        else:
-                            war = 1
+                    if  (iyear>=2003 and iyear <= 2006) or (iyear>=2014 and iyear < 2017):
+                        war = 1
+                    
                     #conflict column
                     if  (iyear>=2011 and iyear <= 2011+1):
                         if  ((iyear == 2011 and imonth>=2) or (iyear==2012 and imonth <= 2)):#spring demonstrations):
                             conflict = 1
                     
-                    arrivals_dict[date] = [date, num_arrivals, num_fatalities, incident_type, war, season, conflict]
+                    gdi = 0
+                    try:
+                        gdi = gdi_per_month_dict[date]
+                    except KeyError:
+                        pass
+                    cpi = -1
+                    try:
+                        cpi= cpi_per_month_dict[date]
+                    except KeyError:
+                        pass
+                    exchange_rate = 0.0
+                    try:
+                        exchange_rate = exchange_rates[date]
+                    except KeyError:
+                        pass
+                    arrivals_dict[date] = [date, num_arrivals, num_fatalities, incident_type, war, season, conflict, gdi, cpi, exchange_rate]
                     
     return arrivals_dict
     
@@ -81,12 +93,12 @@ def get_incidents(incidents_input_file, arrivals_dict):
             arrivals_dict[date][2] += 0
         except KeyError:
             pass
-        
+        #binarize nkills
         try:
             arrivals_dict[date][3] = data[attack_type_index].replace('Bombing/', '').replace('Hostage Taking (Kidnapping)', 'kidnapping').replace("Armed Assault", "armed_assault").replace('Explosion', 'explosion')
         except KeyError:
             pass
-    print("number of incidents: ", c, "number of incidents with fatalities", f, "number f deaths", k)
+    print("number of incidents: ", c, "number of incidents with fatalities", f, "number of deaths", k)
     
     return df_incidents, arrivals_dict
 
@@ -143,87 +155,160 @@ def make_figures(df):
     plt.tight_layout()
     fig.savefig("nkill_num.png")
     
-    plt.figure()
+    plt.figure(figsize=(8,5))
     sns_plot = sns.boxplot(x="type", y="n", data=df)
     sns_plot.set(xlabel='Atack Type', ylabel='Number of arrivals')
     fig = sns_plot.get_figure() 
     plt.tight_layout()
     fig.savefig("type_num.png")
     
-    plt.figure()
-    sns_plot = sns.boxplot(x = "season", y="n", data=df)
+    plt.figure(figsize=(14,5))
+    fig, axs = plt.subplots(ncols=2)
+    sns_plot = sns.boxplot(x = "season", y="n", data=df, color='grey', ax=axs[0])
     sns_plot.set(xlabel='', ylabel='Number of arrivals')
     sns_plot.set(xticklabels = ['Low season', 'High season'])
-    fig = sns_plot.get_figure()
-    plt.tight_layout()
-    fig.savefig("season_num.png")
-    
-    plt.figure()
-    sns_plot = sns.boxplot(x = "war", y = "n", data = df)
-    sns_plot.set(xlabel="", ylabel='Number of arrivals')
+    sns_plot = sns.boxplot(x = "war", y = "n", data = df, color='grey', ax=axs[1])
+    sns_plot.set_yticks([])
+    sns_plot.set(xlabel="", ylabel="")
     sns_plot.set(xticklabels = ['No War', 'War'])
-    fig = sns_plot.get_figure()
+    
     plt.tight_layout()
-    fig.savefig("war_num.png")
+    plt.savefig("season_war.png")
+    
 
-
-def analysis_fatalities(df):
+def analysis_fatalities(df, include_cpi=False):
     """
     Implement the model
     """
     dummies = pd.get_dummies(df['type'])
     df_dummies = pd.concat([df, dummies], axis=1)
     df_dummies.drop(['type', 'None'], inplace=True, axis=1)#remove the orginal column and the None column
-    df_dummies.loc[df_dummies.nkill > 0, 'bin_nkill'] = 1
+    df_dummies.loc[df_dummies.nkill > 1, 'bin_nkill'] = 1
     df_dummies.loc[df_dummies.nkill <= 0, 'bin_nkill'] = 0
     cols = df_dummies.columns.tolist()
+    window_size = 6
     #df_dummies['n'] = df_dummies['n'].apply(np.log10)
     struct_df = pd.concat([df_dummies, 
-                           df_dummies['armed_assault'].rolling(window=6).sum(),
-                           df_dummies['kidnapping'].rolling(window=6).sum(),
-                           df_dummies['explosion'].rolling(window=6).sum(),
-                           df_dummies['nkill'].rolling(window=6).mean(),
-                           #df_dummies['bin_nkill'].rolling(window=6).sum(),
+                           df_dummies['armed_assault'].rolling(window=window_size).sum(),
+                           df_dummies['kidnapping'].rolling(window=window_size).sum(),
+                           df_dummies['explosion'].rolling(window=window_size).sum(),
+                           df_dummies['nkill'].rolling(window=window_size).mean(),
+                           #df_dummies['bin_nkill'].rolling(window=window_size).sum(),
                            ], axis=1).dropna()
-    lag_cols = ['armed_assault_6', 'kidnapping_6', 'explosion_6', 'nkill_6']
+    lag_cols = ['armed_assault_{}'.format(window_size), 'kidnapping_{}'.format(window_size), 'explosion_{}'.format(window_size), 'nkill_{}'.format(window_size)]#, 'bin_nkill_{}'.format(window_size)]
     cols.extend(lag_cols)
     struct_df.columns = cols
-    for col in ['nkill_6']:
+    for col in ['nkill_{}'.format(window_size)]:
         vals = []
         for n in struct_df[col]:
             if n==0.0:
                 vals.append(n)
             else:
-                vals.append(np.log(n))
+                vals.append(np.log2(n))
         struct_df[col] = vals
+    #struct_df['gdi'] = struct_df['gdi'].apply(np.log)
     
-    from statsmodels.formula.api import ols
-    result = ols("n ~ season + armed_assault_6 + kidnapping_6 + explosion_6 + war + nkill_6 + conflict", data = struct_df).fit()
+    if include_cpi:
+        result = ols("n ~ season + armed_assault_{w} + explosion_{w} + war + nkill_{w} + conflict + gdi + cpi + exchange_rate".format(w=window_size), data = struct_df).fit()
+    else:
+        result = ols("n ~ season + armed_assault_{w} + explosion_{w} + war + nkill_{w} + conflict + gdi + exchange_rate".format(w=window_size), data = struct_df).fit()
     print(result.summary())
     
     #get correlations
     print("correlation between number of arrivals and season: ", struct_df['n'].corr(struct_df['season']))
     print("correlation between number of arrivals and war: ", struct_df['n'].corr(struct_df['war']))
-    print("correlation between number of arrivals and number of deaths in the previous 6 months: ", struct_df['n'].corr(struct_df['nkill_6']))
+    print("correlation between number of arrivals and number of deaths in the previous {} months: ".format(window_size), struct_df['n'].corr(struct_df['nkill_{}'.format(window_size)]))
     
     #save the output dataset to a file
-    struct_df.to_csv("structured_dataset_used_for_modeling_nkill.csv", sep = '\t')
+    if include_cpi:
+        struct_df.to_csv("structured_dataset_used_for_modeling_nkill_include_cpi.csv", sep = '\t')
+    else:
+        struct_df.to_csv("structured_dataset_used_for_modeling_nkill.csv", sep = '\t')
     return struct_df
+
+def read_quarterly_GDI(file_input):
+    "reads the input tsv and writes gdi per month from the given quartely data"
+    gdi_per_month_dict = {}
+    with open(file_input) as fn:
+        header = fn.readline()
+        for l in fn.readlines():
+            sl = l.strip().split('\t')
+            y = int(sl[0].split('-')[0])
+            m = int(sl[0].split('-')[1])
+            n = int(sl[1])
+            if y==2003 and m==1:
+                gdi_per_month_dict['{}-{}-01'.format(y, m)] =  n
+                continue
+            m_1 = m-1
+            m_2 = m-2
+            y_1 = y
+            y_2 = y
+            if m == 1:
+                m_1 = 12
+                m_2 = 11
+                y_1 = y-1
+                y_2 = y-1
+            gdi_per_month_dict['{}-{}-01'.format(y, m)] =  n
+            gdi_per_month_dict['{}-{}-01'.format(y_1, m_1)] =  n
+            gdi_per_month_dict['{}-{}-01'.format(y_2, m_2)] =  n
+    return gdi_per_month_dict
     
+def read_CPI(input_file):
+    "reads the input tsv and writes gdi per month from the given quartely data"
+    cp_per_month_dict = {}
+    with open(input_file) as fn:
+        header = fn.readline()
+        for l in fn.readlines():
+            sl = l.strip().split('\t')
+            y = sl[0]
+            m = sl[1]
+            n = float(sl[2].replace(',', '.'))
+            cp_per_month_dict["{}-{}-01".format(y,m)] = n
+    return cp_per_month_dict
     
+def get_exchange_rates(input_file):
+    val_per_month_dict = {}
+    with open(input_file) as fn:
+        header = fn.readline()
+        for l in fn.readlines():
+            sl = l.strip().split('\t')
+            y = int(sl[0])
+            m = int(sl[1])
+            n = float(sl[2])
+            if y==2003:
+                n=n*150
+            val_per_month_dict["{}-{}-01".format(y,m)] = n
+    return val_per_month_dict
+    
+
 if __name__ == '__main__':
     
     arrivals_input_file = "peryearmonth.txt"
     incidents_input_file = "gtd_export13Nov2018_filteredCol13ErbilSulaymaniahDihok_groupedIncidents.tsv"
     
-    arrivals_dict = get_arrivals(arrivals_input_file)
+    gdi_quarterly_input_file = "quarterly_gdi.tsv"
+    gdi_per_month_dict = read_quarterly_GDI(gdi_quarterly_input_file)
+    
+    cpi_input_file = "monthly_CPI.tsv"
+    cpi_per_month_dict = read_CPI(cpi_input_file)
+    
+    exchange_rates = get_exchange_rates("exchange_rates_IQD_USD.tsv")
+    print(exchange_rates)
+    arrivals_dict = get_arrivals(arrivals_input_file, gdi_per_month_dict, cpi_per_month_dict, exchange_rates)
+    
     df_incidents, incidents_dict = get_incidents(incidents_input_file, arrivals_dict)
-    df = pd.DataFrame.from_dict(incidents_dict, orient='index', columns='date,n,nkill,type,war,season,conflict'.split(','))
-    
+    df = pd.DataFrame.from_dict(incidents_dict, orient='index', columns='date,n,nkill,type,war,season,conflict,gdi,cpi,exchange_rate'.split(','))
+    df.to_csv('dataset_Jan2003Sep2018.csv', sep='\t')
     make_figures(df)
+    
+    print("OLS Resuls (2003-2018)")
     struct_df = analysis_fatalities(df)
+    #print(df.describe())
     
-    
-    
+    #skip observations where no cpi info exist
+    print("OLS Results with CPI (2009-2018)")
+    df_cpi = df[df.cpi>=0]
+    struct_df = analysis_fatalities(df_cpi, include_cpi=True)
+    #print(df_cpi.cpi.describe())
     
     
